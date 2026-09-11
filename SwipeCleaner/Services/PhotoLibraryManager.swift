@@ -11,17 +11,23 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
     @Published private(set) var state: LoadState = .idle
     @Published private(set) var authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @Published private(set) var assets: [PHAsset] = []
-    @Published private(set) var currentIndex = 0
-    @Published private(set) var deletionQueue: [PHAsset] = []
-    @Published private(set) var lastHistoryEntry: SwipeHistoryEntry?
+    @Published private(set) var reviewSession = PhotoReviewSession()
     @Published var deletionErrorMessage: String?
     @Published private(set) var isDeleting = false
 
     let imageManager = PHCachingImageManager()
     private var cachedAssetIDs = Set<String>()
 
-    var currentAsset: PHAsset? { assets.indices.contains(currentIndex) ? assets[currentIndex] : nil }
-    var remainingCount: Int { max(assets.count - currentIndex, 0) }
+    var currentAsset: PHAsset? {
+        guard let id = reviewSession.currentAssetID else { return nil }
+        return assets.first { $0.localIdentifier == id }
+    }
+    var remainingCount: Int { reviewSession.remainingCount }
+    var deletionQueue: [PHAsset] {
+        let byID = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
+        return reviewSession.deletionIDs.compactMap { byID[$0] }
+    }
+    var lastHistoryEntry: SwipeHistoryEntry? { reviewSession.lastHistoryEntry }
     var isLimited: Bool { authorizationStatus == .limited }
 
     override init() {
@@ -71,36 +77,24 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
         result.enumerateObjects { asset, _, _ in loaded.append(asset) }
 
         assets = loaded
-        currentIndex = min(currentIndex, loaded.count)
-        let validIDs = Set(loaded.map(\.localIdentifier))
-        deletionQueue.removeAll { !validIDs.contains($0.localIdentifier) }
+        reviewSession.updateAssets(loaded.map(\.localIdentifier))
         state = loaded.isEmpty ? .empty : .ready
         updatePrefetching()
     }
 
     func decide(_ decision: SwipeDecision) {
-        guard let asset = currentAsset else { return }
-        if decision == .delete,
-           !deletionQueue.contains(where: { $0.localIdentifier == asset.localIdentifier }) {
-            deletionQueue.append(asset)
-        }
-        lastHistoryEntry = SwipeHistoryEntry(asset: asset, index: currentIndex, decision: decision)
-        currentIndex += 1
+        guard currentAsset != nil else { return }
+        reviewSession.decide(decision)
         updatePrefetching()
     }
 
     func undoLastDecision() {
-        guard let entry = lastHistoryEntry else { return }
-        if entry.decision == .delete {
-            deletionQueue.removeAll { $0.localIdentifier == entry.asset.localIdentifier }
-        }
-        currentIndex = min(entry.index, assets.count)
-        lastHistoryEntry = nil
+        reviewSession.undoLastDecision()
         updatePrefetching()
     }
 
     func removeFromDeletionQueue(_ asset: PHAsset) {
-        deletionQueue.removeAll { $0.localIdentifier == asset.localIdentifier }
+        reviewSession.removeFromDeletionQueue(assetID: asset.localIdentifier)
     }
 
     func presentLimitedLibraryPicker() {
@@ -122,9 +116,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
             }
             let deletedIDs = Set(queued.map(\.localIdentifier))
             assets.removeAll { deletedIDs.contains($0.localIdentifier) }
-            deletionQueue.removeAll()
-            currentIndex = min(currentIndex, assets.count)
-            lastHistoryEntry = nil
+            reviewSession.removeDeletedAssets(deletedIDs)
             state = assets.isEmpty ? .empty : .ready
             updatePrefetching()
             return true
@@ -138,8 +130,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
     }
 
     private func updatePrefetching() {
-        let range = currentIndex..<min(currentIndex + 6, assets.count)
-        let nearby = range.map { assets[$0] }
+        let unreviewed = assets.filter { !reviewSession.reviewedIDs.contains($0.localIdentifier) }
+        let nearby = Array(unreviewed.prefix(6))
         let nearbyIDs = Set(nearby.map(\.localIdentifier))
         let requestOptions = PHImageRequestOptions()
         requestOptions.deliveryMode = .opportunistic

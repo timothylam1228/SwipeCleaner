@@ -40,3 +40,8 @@ xcodebuild -project SwipeCleaner.xcodeproj \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
+Run the state-machine tests in Xcode with **Product → Test** (⌘U), or from Terminal:
+
+```sh
+xcodebuild test -project SwipeCleaner.xcodeproj -scheme SwipeCleaner -destination 'platform=iOS Simulator,name=iPhone 15'
+```

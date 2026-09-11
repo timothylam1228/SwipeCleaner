@@ -1,0 +1,21 @@
+name: iOS Build and Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-for-testing:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build app and unit tests
+        run: >-
+          xcodebuild build-for-testing
+          -project SwipeCleaner.xcodeproj
+          -scheme SwipeCleaner
+          -configuration Debug
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO

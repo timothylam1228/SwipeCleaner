@@ -46,4 +46,4 @@ Run the state-machine tests in Xcode with **Product → Test** (⌘U), or from T
 xcodebuild test -project SwipeCleaner.xcodeproj -scheme SwipeCleaner -destination 'platform=iOS Simulator,name=iPhone 15'
 ```
 
-GitHub Actions also builds the app and unit-test bundle on a macOS runner after every push and pull request.
+GitHub Actions also builds the app and runs the unit tests in an iPhone simulator after every push and pull request.

@@ -6,16 +6,16 @@ on:
   pull_request:
 
 jobs:
-  build-for-testing:
+  test:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Build app and unit tests
+      - name: Run app unit tests
         run: >-
-          xcodebuild build-for-testing
+          xcodebuild test
           -project SwipeCleaner.xcodeproj
           -scheme SwipeCleaner
           -configuration Debug
-          -destination 'generic/platform=iOS Simulator'
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest'
           CODE_SIGNING_ALLOWED=NO

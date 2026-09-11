@@ -1,5 +1,4 @@
 import XCTest
-@testable import SwipeCleaner
 
 final class PhotoReviewSessionTests: XCTestCase {
     func testDeleteQueuesPhotoAndAdvances() {

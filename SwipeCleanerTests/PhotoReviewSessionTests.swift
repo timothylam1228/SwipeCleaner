@@ -81,6 +81,30 @@ final class PhotoReviewSessionTests: XCTestCase {
         XCTAssertEqual(session.deletionIDs, ["newer"])
     }
 
+    func testProgressRoundTripPreservesReviewedAndQueuedPhotos() throws {
+        var original = makeSession()
+        original.decide(.delete)
+        original.decide(.keep)
+
+        let data = try JSONEncoder().encode(original.progress)
+        let decoded = try JSONDecoder().decode(PhotoReviewSession.Progress.self, from: data)
+        var restored = PhotoReviewSession()
+        restored.restore(decoded)
+        restored.updateAssets(["newest", "newer", "oldest"])
+
+        XCTAssertEqual(restored.deletionIDs, ["newest"])
+        XCTAssertEqual(restored.currentAssetID, "oldest")
+        XCTAssertEqual(restored.remainingCount, 1)
+    }
+
+    func testSimilaritySelectionQueuesPhotoForDeletion() {
+        var session = makeSession()
+        session.queueForDeletion(assetID: "newer")
+
+        XCTAssertEqual(session.deletionIDs, ["newer"])
+        XCTAssertEqual(session.currentAssetID, "newest")
+    }
+
     private func makeSession() -> PhotoReviewSession {
         var session = PhotoReviewSession()
         session.updateAssets(["newest", "newer", "oldest"])

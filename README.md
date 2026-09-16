@@ -9,6 +9,11 @@ SwipeCleaner is a native SwiftUI photo triage app for iPhone (iOS 17+). Swipe le
 - All-photo, recent, yearly, and custom date-range review
 - iCloud image downloads and nearby-photo prefetching through `PHCachingImageManager`
 - A pre-rendered next-card stack and 12-photo cache window for faster swiping
+- Persistent review and deletion-queue progress across launches
+- Full-screen photo details with pinch and double-tap zoom
+- Native haptic feedback for keep, delete, undo, warnings, and completed deletion
+- On-device Vision scanning for user-reviewed similar-photo groups
+- Automatic protection for favorited photos
 - Undo for the last decision
 - Review grid with individual removal from the deletion queue
 - One batch deletion using `PHPhotoLibrary.performChanges`

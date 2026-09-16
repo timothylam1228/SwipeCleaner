@@ -15,11 +15,13 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
     @Published private(set) var reviewSession = PhotoReviewSession()
     @Published private(set) var dateFilter = PhotoDateFilter()
     @Published var deletionErrorMessage: String?
+    @Published var safetyMessage: String?
     @Published private(set) var isDeleting = false
 
     let imageManager = PHCachingImageManager()
     private var cachedAssetIDs = Set<String>()
     private var allAssets: [PHAsset] = []
+    private let progressKey = "SwipeCleaner.reviewProgress.v1"
 
     let cardTargetSize = CGSize(
         width: UIScreen.main.bounds.width * UIScreen.main.scale,
@@ -46,6 +48,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        restoreProgress()
         PHPhotoLibrary.shared().register(self)
     }
 
@@ -100,28 +103,61 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
     }
 
     private func applyCurrentFilter() {
+        for favorite in allAssets where favorite.isFavorite && reviewSession.deletionIDs.contains(favorite.localIdentifier) {
+            reviewSession.removeFromDeletionQueue(assetID: favorite.localIdentifier)
+        }
         assets = allAssets.filter { dateFilter.contains($0.creationDate) }
         reviewSession.updateAssets(
             assets.map(\.localIdentifier),
             availableAssetIDs: Set(allAssets.map(\.localIdentifier))
         )
+        persistProgress()
         state = assets.isEmpty ? .empty : .ready
         updatePrefetching()
     }
 
     func decide(_ decision: SwipeDecision) {
-        guard currentAsset != nil else { return }
+        guard let asset = currentAsset else { return }
+        if decision == .delete, asset.isFavorite {
+            safetyMessage = "This photo is marked as a Favorite. Unfavorite it in Photos before adding it to the deletion queue."
+            HapticFeedback.warning()
+            return
+        }
         reviewSession.decide(decision)
+        if decision == .delete { HapticFeedback.queuedForDeletion() } else { HapticFeedback.kept() }
+        persistProgress()
         updatePrefetching()
     }
 
     func undoLastDecision() {
         reviewSession.undoLastDecision()
+        HapticFeedback.undone()
+        persistProgress()
         updatePrefetching()
     }
 
     func removeFromDeletionQueue(_ asset: PHAsset) {
         reviewSession.removeFromDeletionQueue(assetID: asset.localIdentifier)
+        persistProgress()
+    }
+
+    func queueForDeletion(_ asset: PHAsset) {
+        guard !asset.isFavorite else {
+            safetyMessage = "Favorited photos are protected. Unfavorite this photo in Photos before queueing it."
+            HapticFeedback.warning()
+            return
+        }
+        reviewSession.queueForDeletion(assetID: asset.localIdentifier)
+        HapticFeedback.queuedForDeletion()
+        persistProgress()
+    }
+
+    func isQueuedForDeletion(_ asset: PHAsset) -> Bool {
+        reviewSession.deletionIDs.contains(asset.localIdentifier)
+    }
+
+    func asset(withID id: String) -> PHAsset? {
+        allAssets.first { $0.localIdentifier == id }
     }
 
     func presentLimitedLibraryPicker() {
@@ -144,6 +180,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
             let deletedIDs = Set(queued.map(\.localIdentifier))
             allAssets.removeAll { deletedIDs.contains($0.localIdentifier) }
             reviewSession.removeDeletedAssets(deletedIDs)
+            HapticFeedback.deletionCompleted()
+            persistProgress()
             applyCurrentFilter()
             return true
         } catch {
@@ -153,6 +191,17 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
                 : "Could not delete the selected photos: \(error.localizedDescription)"
             return false
         }
+    }
+
+    private func restoreProgress() {
+        guard let data = UserDefaults.standard.data(forKey: progressKey),
+              let progress = try? JSONDecoder().decode(PhotoReviewSession.Progress.self, from: data) else { return }
+        reviewSession.restore(progress)
+    }
+
+    private func persistProgress() {
+        guard let data = try? JSONEncoder().encode(reviewSession.progress) else { return }
+        UserDefaults.standard.set(data, forKey: progressKey)
     }
 
     private func updatePrefetching() {

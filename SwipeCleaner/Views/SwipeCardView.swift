@@ -6,6 +6,7 @@ struct SwipeCardView: View {
     let imageManager: PHImageManager
     let targetSize: CGSize
     let onDecision: (SwipeDecision) -> Void
+    let onDetails: () -> Void
 
     @State private var offset: CGSize = .zero
     @State private var isAnimatingOut = false
@@ -23,6 +24,15 @@ struct SwipeCardView: View {
                     indicator("DELETE", color: .red, opacity: max(0, -offset.width / threshold))
                 }
                 .padding(28)
+
+                HStack {
+                    Spacer()
+                    Button(action: onDetails) {
+                        Image(systemName: "info.circle.fill").font(.title2).symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.55))
+                    }
+                    .accessibilityLabel("Show photo details and zoom")
+                }
+                .padding(18)
 
                 if let date = asset.creationDate {
                     VStack {

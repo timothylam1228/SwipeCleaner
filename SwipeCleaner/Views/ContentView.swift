@@ -6,6 +6,8 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showReview = false
     @State private var showDateRange = false
+    @State private var showSimilarPhotos = false
+    @State private var detailAsset: PHAsset?
 
     var body: some View {
         NavigationStack {
@@ -20,7 +22,9 @@ struct ContentView: View {
                     Button("Undo", systemImage: "arrow.uturn.backward") { library.undoLastDecision() }
                         .disabled(library.lastHistoryEntry == nil)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { showSimilarPhotos = true } label: { Image(systemName: "square.stack.3d.up") }
+                        .accessibilityLabel("Find similar photos")
                     Button { showReview = true } label: { Label("Review \(library.deletionQueue.count)", systemImage: "trash") }
                 }
             }
@@ -32,6 +36,13 @@ struct ContentView: View {
         .sheet(isPresented: $showDateRange) {
             DateRangePickerView(filter: library.dateFilter) { library.setDateFilter($0) }
         }
+        .sheet(isPresented: $showSimilarPhotos) { SimilarPhotosView().environmentObject(library) }
+        .fullScreenCover(isPresented: Binding(get: { detailAsset != nil }, set: { if !$0 { detailAsset = nil } })) {
+            if let detailAsset { PhotoDetailView(asset: detailAsset, imageManager: library.imageManager) }
+        }
+        .alert("Photo Protected", isPresented: Binding(get: { library.safetyMessage != nil }, set: { if !$0 { library.safetyMessage = nil } })) {
+            Button("OK", role: .cancel) { library.safetyMessage = nil }
+        } message: { Text(library.safetyMessage ?? "") }
     }
 
     @ViewBuilder private var content: some View {
@@ -114,7 +125,7 @@ struct ContentView: View {
                         .opacity(0.82)
                         .allowsHitTesting(false)
                 }
-                SwipeCardView(asset: asset, imageManager: library.imageManager, targetSize: library.cardTargetSize) { library.decide($0) }
+                SwipeCardView(asset: asset, imageManager: library.imageManager, targetSize: library.cardTargetSize, onDecision: { library.decide($0) }, onDetails: { detailAsset = asset })
                     .id(asset.localIdentifier)
             }
 

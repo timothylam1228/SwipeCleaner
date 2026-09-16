@@ -48,6 +48,13 @@ struct ContentView: View {
                 library.flushProgress()
             }
         }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIApplication.didReceiveMemoryWarningNotification
+            )
+        ) { _ in
+            library.handleMemoryWarning()
+        }
         .sheet(isPresented: $showReview) {
             ReviewView().environmentObject(library)
         }

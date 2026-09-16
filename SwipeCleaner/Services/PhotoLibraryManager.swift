@@ -47,7 +47,6 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
     private var persistenceTask: Task<Void, Never>?
     private var loadRevision = 0
     private var filterRevision = 0
-    private var memoryWarningObserver: NSObjectProtocol?
 
     private let legacyProgressKey = "SwipeCleaner.reviewProgress.v1"
     private let prefetchCount = 4
@@ -92,13 +91,6 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
         super.init()
         restoreProgress()
         PHPhotoLibrary.shared().register(self)
-        memoryWarningObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.clearImageCaches() }
-        }
     }
 
     deinit {
@@ -106,9 +98,6 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
         filterTask?.cancel()
         persistenceTask?.cancel()
         PHPhotoLibrary.shared().unregisterChangeObserver(self)
-        if let memoryWarningObserver {
-            NotificationCenter.default.removeObserver(memoryWarningObserver)
-        }
     }
 
     func begin() async {
@@ -461,7 +450,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
         cachedAssetIDs = nearbyIDs
     }
 
-    private func clearImageCaches() {
+    func handleMemoryWarning() {
         imageManager.stopCachingImagesForAllAssets()
         imageCache.removeAll()
         cachedAssetIDs.removeAll()

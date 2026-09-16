@@ -61,6 +61,16 @@ final class PhotoReviewSessionTests: XCTestCase {
         XCTAssertNil(session.lastHistoryEntry)
     }
 
+    func testChangingVisibleRangePreservesDeletionQueue() {
+        var session = makeSession()
+        session.decide(.delete)
+
+        session.updateAssets(["older"], availableAssetIDs: ["newest", "newer", "oldest", "older"])
+
+        XCTAssertEqual(session.deletionIDs, ["newest"])
+        XCTAssertEqual(session.currentAssetID, "older")
+    }
+
     func testRemovingOneQueuedPhotoPreservesOtherSelections() {
         var session = makeSession()
         session.decide(.delete)

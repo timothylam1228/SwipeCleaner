@@ -13,23 +13,36 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
     @Published private(set) var authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @Published private(set) var assets: [PHAsset] = []
     @Published private(set) var reviewSession = PhotoReviewSession()
+    @Published private(set) var dateFilter = PhotoDateFilter()
     @Published var deletionErrorMessage: String?
     @Published private(set) var isDeleting = false
 
     let imageManager = PHCachingImageManager()
     private var cachedAssetIDs = Set<String>()
+    private var allAssets: [PHAsset] = []
+
+    let cardTargetSize = CGSize(
+        width: UIScreen.main.bounds.width * UIScreen.main.scale,
+        height: UIScreen.main.bounds.height * UIScreen.main.scale
+    )
 
     var currentAsset: PHAsset? {
         guard let id = reviewSession.currentAssetID else { return nil }
         return assets.first { $0.localIdentifier == id }
     }
+    var nextAsset: PHAsset? {
+        guard reviewSession.unreviewedAssetIDs.count > 1 else { return nil }
+        let id = reviewSession.unreviewedAssetIDs[1]
+        return assets.first { $0.localIdentifier == id }
+    }
     var remainingCount: Int { reviewSession.remainingCount }
     var deletionQueue: [PHAsset] {
-        let byID = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
+        let byID = Dictionary(uniqueKeysWithValues: allAssets.map { ($0.localIdentifier, $0) })
         return reviewSession.deletionIDs.compactMap { byID[$0] }
     }
     var lastHistoryEntry: SwipeHistoryEntry? { reviewSession.lastHistoryEntry }
     var isLimited: Bool { authorizationStatus == .limited }
+    var hasPhotosOutsideFilter: Bool { !allAssets.isEmpty && assets.isEmpty }
 
     override init() {
         super.init()
@@ -77,9 +90,22 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
         loaded.reserveCapacity(result.count)
         result.enumerateObjects { asset, _, _ in loaded.append(asset) }
 
-        assets = loaded
-        reviewSession.updateAssets(loaded.map(\.localIdentifier))
-        state = loaded.isEmpty ? .empty : .ready
+        allAssets = loaded
+        applyCurrentFilter()
+    }
+
+    func setDateFilter(_ filter: PhotoDateFilter) {
+        dateFilter = filter
+        applyCurrentFilter()
+    }
+
+    private func applyCurrentFilter() {
+        assets = allAssets.filter { dateFilter.contains($0.creationDate) }
+        reviewSession.updateAssets(
+            assets.map(\.localIdentifier),
+            availableAssetIDs: Set(allAssets.map(\.localIdentifier))
+        )
+        state = assets.isEmpty ? .empty : .ready
         updatePrefetching()
     }
 
@@ -116,10 +142,9 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
                 PHAssetChangeRequest.deleteAssets(queued as NSArray)
             }
             let deletedIDs = Set(queued.map(\.localIdentifier))
-            assets.removeAll { deletedIDs.contains($0.localIdentifier) }
+            allAssets.removeAll { deletedIDs.contains($0.localIdentifier) }
             reviewSession.removeDeletedAssets(deletedIDs)
-            state = assets.isEmpty ? .empty : .ready
-            updatePrefetching()
+            applyCurrentFilter()
             return true
         } catch {
             let nsError = error as NSError
@@ -132,15 +157,15 @@ final class PhotoLibraryManager: NSObject, ObservableObject {
 
     private func updatePrefetching() {
         let unreviewed = assets.filter { !reviewSession.reviewedIDs.contains($0.localIdentifier) }
-        let nearby = Array(unreviewed.prefix(6))
+        let nearby = Array(unreviewed.prefix(12))
         let nearbyIDs = Set(nearby.map(\.localIdentifier))
         let requestOptions = PHImageRequestOptions()
         requestOptions.deliveryMode = .opportunistic
         requestOptions.resizeMode = .fast
         requestOptions.isNetworkAccessAllowed = true
-        let size = CGSize(width: 900, height: 1200)
+        let size = cardTargetSize
 
-        let noLongerNeeded = assets.filter { cachedAssetIDs.contains($0.localIdentifier) && !nearbyIDs.contains($0.localIdentifier) }
+        let noLongerNeeded = allAssets.filter { cachedAssetIDs.contains($0.localIdentifier) && !nearbyIDs.contains($0.localIdentifier) }
         if !noLongerNeeded.isEmpty {
             imageManager.stopCachingImages(for: noLongerNeeded, targetSize: size, contentMode: .aspectFit, options: requestOptions)
         }

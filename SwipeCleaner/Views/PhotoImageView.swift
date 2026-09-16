@@ -5,12 +5,14 @@ struct PhotoImageView: View {
     let asset: PHAsset
     let manager: PHImageManager
     let contentMode: ContentMode
+    let requestedTargetSize: CGSize?
     @StateObject private var loader: PhotoImageLoader
 
-    init(asset: PHAsset, manager: PHImageManager, contentMode: ContentMode = .fit) {
+    init(asset: PHAsset, manager: PHImageManager, contentMode: ContentMode = .fit, targetSize: CGSize? = nil) {
         self.asset = asset
         self.manager = manager
         self.contentMode = contentMode
+        requestedTargetSize = targetSize
         _loader = StateObject(wrappedValue: PhotoImageLoader(manager: manager))
     }
 
@@ -30,10 +32,10 @@ struct PhotoImageView: View {
             }
             .task(id: asset.localIdentifier) {
                 let scale = UIScreen.main.scale
-                loader.load(asset: asset, targetSize: CGSize(width: proxy.size.width * scale, height: proxy.size.height * scale), contentMode: contentMode == .fill ? .aspectFill : .aspectFit)
+                let measuredSize = CGSize(width: proxy.size.width * scale, height: proxy.size.height * scale)
+                loader.load(asset: asset, targetSize: requestedTargetSize ?? measuredSize, contentMode: contentMode == .fill ? .aspectFill : .aspectFit)
             }
             .onDisappear { loader.cancel() }
         }
     }
 }
-

@@ -24,9 +24,13 @@ struct PhotoReviewSession: Equatable {
         assetIDs.lazy.filter { !reviewedIDs.contains($0) }.count
     }
 
-    mutating func updateAssets(_ newAssetIDs: [String]) {
+    var unreviewedAssetIDs: [String] {
+        assetIDs.filter { !reviewedIDs.contains($0) }
+    }
+
+    mutating func updateAssets(_ newAssetIDs: [String], availableAssetIDs: Set<String>? = nil) {
         assetIDs = newAssetIDs
-        let available = Set(newAssetIDs)
+        let available = availableAssetIDs ?? Set(newAssetIDs)
         reviewedIDs.formIntersection(available)
         deletionIDs.removeAll { !available.contains($0) }
         if let entry = lastHistoryEntry, !available.contains(entry.assetID) {

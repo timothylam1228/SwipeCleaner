@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject private var library: PhotoLibraryManager
     @Environment(\.scenePhase) private var scenePhase
     @State private var showReview = false
+    @State private var showDateRange = false
 
     var body: some View {
         NavigationStack {
@@ -28,6 +29,9 @@ struct ContentView: View {
         .task { await library.begin() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await library.refreshAuthorizationAndPhotos() } } }
         .sheet(isPresented: $showReview) { ReviewView().environmentObject(library) }
+        .sheet(isPresented: $showDateRange) {
+            DateRangePickerView(filter: library.dateFilter) { library.setDateFilter($0) }
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -39,7 +43,13 @@ struct ContentView: View {
         case .denied:
             deniedView
         case .empty:
-            ContentUnavailableView("No Photos", systemImage: "photo.on.rectangle.angled", description: Text("There are no accessible photos in your library."))
+            ContentUnavailableView {
+                Label(library.hasPhotosOutsideFilter ? "No Photos in This Range" : "No Photos", systemImage: "photo.on.rectangle.angled")
+            } description: {
+                Text(library.hasPhotosOutsideFilter ? "Choose another time range to continue reviewing." : "There are no accessible photos in your library.")
+            } actions: {
+                if library.hasPhotosOutsideFilter { Button("Choose Time Range") { showDateRange = true }.buttonStyle(.borderedProminent) }
+            }
         case .failed(let message):
             ContentUnavailableView("Couldn’t Load Photos", systemImage: "exclamationmark.triangle", description: Text(message))
         case .ready:
@@ -85,8 +95,28 @@ struct ContentView: View {
                 Label("\(library.deletionQueue.count) queued", systemImage: "trash")
             }.font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
 
-            SwipeCardView(asset: asset, imageManager: library.imageManager) { library.decide($0) }
-                .id(asset.localIdentifier)
+            Button { showDateRange = true } label: {
+                HStack {
+                    Label(library.dateFilter.title, systemImage: "calendar")
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down").font(.caption)
+                }
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+            }
+
+            ZStack {
+                if let nextAsset = library.nextAsset {
+                    PhotoImageView(asset: nextAsset, manager: library.imageManager, targetSize: library.cardTargetSize)
+                        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .scaleEffect(0.97)
+                        .opacity(0.82)
+                        .allowsHitTesting(false)
+                }
+                SwipeCardView(asset: asset, imageManager: library.imageManager, targetSize: library.cardTargetSize) { library.decide($0) }
+                    .id(asset.localIdentifier)
+            }
 
             HStack(spacing: 52) {
                 actionButton(title: "Delete", icon: "trash.fill", color: .red) { library.decide(.delete) }
@@ -113,4 +143,3 @@ struct ContentView: View {
         }
     }
 }
-

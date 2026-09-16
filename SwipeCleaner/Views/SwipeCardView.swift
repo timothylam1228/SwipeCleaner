@@ -4,6 +4,7 @@ import SwiftUI
 struct SwipeCardView: View {
     let asset: PHAsset
     let imageManager: PHImageManager
+    let targetSize: CGSize
     let onDecision: (SwipeDecision) -> Void
 
     @State private var offset: CGSize = .zero
@@ -13,7 +14,7 @@ struct SwipeCardView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .top) {
-                PhotoImageView(asset: asset, manager: imageManager)
+                PhotoImageView(asset: asset, manager: imageManager, targetSize: targetSize)
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
 
                 HStack {
@@ -68,4 +69,3 @@ struct SwipeCardView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { onDecision(decision) }
     }
 }
-

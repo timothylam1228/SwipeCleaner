@@ -1,3 +1,4 @@
+import Foundation
 import Photos
 import SwiftUI
 import Vision
@@ -18,6 +19,7 @@ final class SimilarPhotoFinder: ObservableObject {
     private var scanTask: Task<Void, Never>?
     private let maximumAssetCount = 250
     private let similarityThreshold: Float = 8
+    private let concurrentRequestCount = 4
 
     var scanLimit: Int { maximumAssetCount }
 
@@ -33,22 +35,23 @@ final class SimilarPhotoFinder: ObservableObject {
         state = .scanning(completed: 0, total: candidates.count)
         scanTask = Task { [weak self] in
             guard let self else { return }
-            var observations: [(String, VNFeaturePrintObservation)] = []
 
             do {
-                for (index, asset) in candidates.enumerated() {
-                    try Task.checkCancellation()
-                    let image = try await requestThumbnail(for: asset, manager: imageManager)
-                    guard let cgImage = image.cgImage else { continue }
-                    let observation = try await Task.detached(priority: .userInitiated) {
-                        try Self.makeFeaturePrint(from: cgImage)
-                    }.value
-                    observations.append((asset.localIdentifier, observation))
-                    state = .scanning(completed: index + 1, total: candidates.count)
-                }
+                let observations = try await analyze(
+                    candidates,
+                    imageManager: imageManager
+                )
+                try Task.checkCancellation()
+
+                let clustered = try await Task.detached(priority: .userInitiated) {
+                    try Self.cluster(
+                        observations,
+                        threshold: self.similarityThreshold
+                    )
+                }.value
 
                 try Task.checkCancellation()
-                groups = Self.cluster(observations, threshold: similarityThreshold)
+                groups = clustered
                 state = .finished
             } catch is CancellationError {
                 state = .cancelled
@@ -63,36 +66,120 @@ final class SimilarPhotoFinder: ObservableObject {
         scanTask = nil
     }
 
-    private func requestThumbnail(for asset: PHAsset, manager: PHImageManager) async throws -> UIImage {
-        try await withCheckedThrowingContinuation { continuation in
-            let options = PHImageRequestOptions()
-            options.deliveryMode = .highQualityFormat
-            options.resizeMode = .fast
-            options.isNetworkAccessAllowed = true
-            manager.requestImage(
-                for: asset,
-                targetSize: CGSize(width: 320, height: 320),
-                contentMode: .aspectFill,
-                options: options
-            ) { image, info in
-                if let error = info?[PHImageErrorKey] as? Error {
-                    continuation.resume(throwing: error)
-                } else if (info?[PHImageCancelledKey] as? Bool) == true {
-                    continuation.resume(throwing: CancellationError())
-                } else if let image {
-                    continuation.resume(returning: image)
-                } else {
-                    continuation.resume(throwing: SimilarityError.imageUnavailable)
+    private func analyze(
+        _ assets: [PHAsset],
+        imageManager: PHImageManager
+    ) async throws -> [(String, VNFeaturePrintObservation)] {
+        var observations: [(Int, String, VNFeaturePrintObservation)] = []
+        var completed = 0
+        var nextIndex = 0
+
+        try await withThrowingTaskGroup(
+            of: (Int, String, VNFeaturePrintObservation)?.self
+        ) { group in
+            func addNextTask() {
+                guard nextIndex < assets.count else { return }
+                let index = nextIndex
+                let asset = assets[index]
+                nextIndex += 1
+                group.addTask {
+                    try await Self.analyzeAsset(
+                        asset,
+                        index: index,
+                        manager: imageManager
+                    )
                 }
             }
+
+            for _ in 0..<min(concurrentRequestCount, assets.count) {
+                addNextTask()
+            }
+
+            while let result = try await group.next() {
+                try Task.checkCancellation()
+                completed += 1
+                state = .scanning(completed: completed, total: assets.count)
+                if let result {
+                    observations.append(result)
+                }
+                addNextTask()
+            }
+        }
+
+        return observations
+            .sorted { $0.0 < $1.0 }
+            .map { ($0.1, $0.2) }
+    }
+
+    private nonisolated static func analyzeAsset(
+        _ asset: PHAsset,
+        index: Int,
+        manager: PHImageManager
+    ) async throws -> (Int, String, VNFeaturePrintObservation)? {
+        do {
+            let image = try await requestThumbnail(for: asset, manager: manager)
+            try Task.checkCancellation()
+            guard let cgImage = image.cgImage else { return nil }
+
+            let observation = try await Task.detached(priority: .userInitiated) {
+                try makeFeaturePrint(from: cgImage)
+            }.value
+            return (index, asset.localIdentifier, observation)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // One inaccessible iCloud asset should not abort the entire scan.
+            return nil
         }
     }
 
-    private nonisolated static func makeFeaturePrint(from image: CGImage) throws -> VNFeaturePrintObservation {
+    private nonisolated static func requestThumbnail(
+        for asset: PHAsset,
+        manager: PHImageManager
+    ) async throws -> UIImage {
+        let token = ImageRequestToken(manager: manager)
+
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                guard token.install(continuation) else { return }
+
+                let options = PHImageRequestOptions()
+                options.deliveryMode = .highQualityFormat
+                options.resizeMode = .fast
+                options.isNetworkAccessAllowed = true
+
+                let requestID = manager.requestImage(
+                    for: asset,
+                    targetSize: CGSize(width: 320, height: 320),
+                    contentMode: .aspectFill,
+                    options: options
+                ) { image, info in
+                    if let error = info?[PHImageErrorKey] as? Error {
+                        token.finish(.failure(error))
+                    } else if (info?[PHImageCancelledKey] as? Bool) == true {
+                        token.finish(.failure(CancellationError()))
+                    } else if let image {
+                        token.finish(.success(image))
+                    } else {
+                        token.finish(.failure(SimilarityError.imageUnavailable))
+                    }
+                }
+                token.setRequestID(requestID)
+            }
+        } onCancel: {
+            token.cancel()
+        }
+    }
+
+    private nonisolated static func makeFeaturePrint(
+        from image: CGImage
+    ) throws -> VNFeaturePrintObservation {
         let request = VNGenerateImageFeaturePrintRequest()
         request.imageCropAndScaleOption = .scaleFill
         try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
-        guard let observation = request.results?.first as? VNFeaturePrintObservation else {
+        guard let observation =
+            request.results?.first as? VNFeaturePrintObservation else {
             throw SimilarityError.featurePrintUnavailable
         }
         return observation
@@ -101,19 +188,30 @@ final class SimilarPhotoFinder: ObservableObject {
     private nonisolated static func cluster(
         _ observations: [(String, VNFeaturePrintObservation)],
         threshold: Float
-    ) -> [SimilarPhotoGroup] {
+    ) throws -> [SimilarPhotoGroup] {
         var consumed = Set<String>()
         var results: [SimilarPhotoGroup] = []
 
-        for (index, candidate) in observations.enumerated() where !consumed.contains(candidate.0) {
+        for (index, candidate) in observations.enumerated()
+        where !consumed.contains(candidate.0) {
+            try Task.checkCancellation()
             var group = [candidate.0]
-            for comparison in observations.dropFirst(index + 1) where !consumed.contains(comparison.0) {
+
+            for comparison in observations.dropFirst(index + 1)
+            where !consumed.contains(comparison.0) {
                 var distance: Float = 0
-                guard (try? candidate.1.computeDistance(&distance, to: comparison.1)) != nil,
-                      distance <= threshold else { continue }
+                guard
+                    (try? candidate.1.computeDistance(
+                        &distance,
+                        to: comparison.1
+                    )) != nil,
+                    distance <= threshold
+                else { continue }
+
                 group.append(comparison.0)
                 consumed.insert(comparison.0)
             }
+
             if group.count > 1 {
                 consumed.insert(candidate.0)
                 results.append(SimilarPhotoGroup(assetIDs: group))
@@ -128,9 +226,77 @@ final class SimilarPhotoFinder: ObservableObject {
 
         var errorDescription: String? {
             switch self {
-            case .imageUnavailable: "A photo thumbnail could not be loaded."
-            case .featurePrintUnavailable: "Vision could not analyze a photo."
+            case .imageUnavailable:
+                "A photo thumbnail could not be loaded."
+            case .featurePrintUnavailable:
+                "Vision could not analyze a photo."
             }
         }
+    }
+}
+
+private final class ImageRequestToken: @unchecked Sendable {
+    private let manager: PHImageManager
+    private let lock = NSLock()
+    private var requestID = PHInvalidImageRequestID
+    private var continuation: CheckedContinuation<UIImage, Error>?
+    private var isFinished = false
+
+    init(manager: PHImageManager) {
+        self.manager = manager
+    }
+
+    func install(_ continuation: CheckedContinuation<UIImage, Error>) -> Bool {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return false
+        }
+        self.continuation = continuation
+        lock.unlock()
+        return true
+    }
+
+    func setRequestID(_ requestID: PHImageRequestID) {
+        lock.lock()
+        self.requestID = requestID
+        let shouldCancel = isFinished
+        lock.unlock()
+
+        if shouldCancel {
+            manager.cancelImageRequest(requestID)
+        }
+    }
+
+    func finish(_ result: Result<UIImage, Error>) {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isFinished = true
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+
+    func cancel() {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isFinished = true
+        let requestID = requestID
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+
+        if requestID != PHInvalidImageRequestID {
+            manager.cancelImageRequest(requestID)
+        }
+        continuation?.resume(throwing: CancellationError())
     }
 }
